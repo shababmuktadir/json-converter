@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>JSON / JSONL → CSV Converter</title>
+  <!-- Tabulator CSS -->
+  <link href="https://unpkg.com/tabulator-tables@5.5.2/dist/css/tabulator.min.css" rel="stylesheet">
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -23,7 +25,7 @@
       </div>
     </div>
 
-    <!-- Status / progress -->
+    <!-- Status -->
     <div id="status" class="status hidden">
       <div class="progress-bar"><div id="progressFill"></div></div>
       <span id="statusText"></span>
@@ -35,26 +37,19 @@
         <span id="rowCount">0</span> rows • <span id="colCount">0</span> columns
       </div>
       <div class="actions">
-        <select id="delimiter">
-          <option value=",">Comma (,)</option>
-          <option value=";">Semicolon (;)</option>
-          <option value="\t">Tab</option>
-        </select>
         <button id="downloadBtn" class="btn primary">⬇ Download CSV</button>
         <button id="resetBtn" class="btn">✕ Reset</button>
       </div>
     </div>
 
-    <!-- Table preview -->
+    <!-- Tabulator Table -->
     <div id="tableWrapper" class="table-wrapper hidden">
-      <table id="previewTable">
-        <thead><tr></tr></thead>
-        <tbody></tbody>
-      </table>
-      <div id="previewNote" class="preview-note"></div>
+      <div id="data-table"></div>
     </div>
   </div>
 
+  <!-- Tabulator JS -->
+  <script src="https://unpkg.com/tabulator-tables@5.5.2/dist/js/tabulator.min.js"></script>
   <script src="script.js"></script>
 </body>
 </html>
