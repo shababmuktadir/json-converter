@@ -70,9 +70,7 @@ async function handleFile(file) {
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed) continue;
-          try {
-            rows.push(JSON.parse(trimmed));
-          } catch (e) { /* ignore invalid line */ }
+          try { rows.push(JSON.parse(trimmed)); } catch (e) {}
         }
         updateProgress(bytesRead, totalSize, totalSizeMB);
         await new Promise(r => setTimeout(r));
@@ -95,7 +93,7 @@ async function handleFile(file) {
       rawParsedData = JSON.parse(text);
     }
 
-    // ✨ SMART PARSING LOGIC (ANY TYPE OF JSON) ✨
+    // ✨ SMART PARSING LOGIC ✨
     processSmartData(rawParsedData);
     
     if (!currentData.length) {
@@ -119,49 +117,45 @@ function processSmartData(data) {
 
   // 1. Identify the main array of records
   if (Array.isArray(data)) {
-    // Case: [{...}, {...}]
     rawRecords = data;
   } else if (typeof data === 'object' && data !== null) {
     const values = Object.values(data);
-    
-    // Check if it's a Dictionary-like object (e.g., {"word1": ["meaning1"], "word2": ["meaning2"]})
     const isDictionary = values.length > 0 && (typeof values[0] !== 'object' || Array.isArray(values[0]));
 
     if (isDictionary) {
+      // Case: {"word": "meaning"}
       rawRecords = Object.entries(data).map(([key, value]) => ({
-        Word_Key: key,
-        Meaning_Value: Array.isArray(value) ? value.join(', ') : value
+        Word: key,
+        Meaning: Array.isArray(value) ? value.join(', ') : value
       }));
     } else {
-      // Check for common array property names (e.g., {data: [...]}, {items: [...]})
+      // Check for common array property names
       let foundArray = null;
       for (const key of Object.keys(data)) {
         if (Array.isArray(data[key]) && data[key].length > 0 && typeof data[key][0] === 'object') {
-          foundArray = data[key];
-          break;
+          foundArray = data[key]; break;
         }
       }
-      if (foundArray) {
-        rawRecords = foundArray;
-      } else {
-        // It's just a single object
-        rawRecords = [data];
-      }
+      rawRecords = foundArray ? foundArray : [data];
     }
   }
 
-  // 2. Flatten each record and extract columns
+  // 2. Flatten & Extract Smart Details (Word, Meaning, POS)
   let normalizedRows = [];
   let columns = new Set();
 
   rawRecords.forEach(item => {
     if (typeof item !== 'object' || item === null) {
-      // If item is a primitive in an array (e.g., ["a", "b", "c"])
       let row = { "Value": item };
       normalizedRows.push(row);
       columns.add("Value");
     } else {
+      // Step A: Flatten nested objects
       let flatItem = flattenObject(item);
+      
+      // Step B: Extract Parts of Speech & Standardize Keys
+      flatItem = extractSmartDetails(flatItem);
+
       normalizedRows.push(flatItem);
       Object.keys(flatItem).forEach(k => columns.add(k));
     }
@@ -171,32 +165,59 @@ function processSmartData(data) {
   currentColumns = Array.from(columns);
 }
 
-/* ---------- Universal Recursive Flatten ---------- */
+/* ---------- Flatten Recursive JSON ---------- */
 function flattenObject(obj, prefix = '') {
   let result = {};
-  
   for (const [key, value] of Object.entries(obj)) {
-    // Capitalize first letter of key for better CSV headers
-    const newKey = prefix ? `${prefix}.${key}` : key.charAt(0).toUpperCase() + key.slice(1);
-
+    const newKey = prefix ? `${prefix}.${key}` : key;
     if (value === null || value === undefined) {
       result[newKey] = "";
     } else if (Array.isArray(value)) {
-      // Array handling: If array of strings/numbers, join them. If array of objects, stringify.
       const isPrimitive = value.every(v => v === null || typeof v !== 'object');
-      if (isPrimitive) {
-        result[newKey] = value.join(', ');
-      } else {
-        result[newKey] = JSON.stringify(value);
-      }
+      result[newKey] = isPrimitive ? value.join(', ') : JSON.stringify(value);
     } else if (typeof value === 'object') {
-      // Nested object handling (recursive)
       Object.assign(result, flattenObject(value, newKey));
     } else {
       result[newKey] = value;
     }
   }
   return result;
+}
+
+/* ---------- ✨ Smart POS Extractor & Standardizer ✨ ---------- */
+function extractSmartDetails(row) {
+  let extractedPOS = new Set();
+  
+  // Keys that usually contain meanings
+  const meaningKeys = ['bn', 'meaning', 'en_meaning', 'definition', 'translation', 'meaning_value'];
+
+  for (let key in row) {
+    if (typeof row[key] === 'string') {
+      // 1. POS Extraction (Looking for words like (Adj.), (Noun), (Adv.))
+      if (meaningKeys.some(mk => key.toLowerCase().includes(mk)) || key === 'Bn') {
+        const posRegex = /\((Adj|Adv|Noun|Verb|Pron|Prep|Conj|Interj)\.?\)/gi;
+        const posMatches = row[key].match(posRegex);
+        
+        if (posMatches) {
+          posMatches.forEach(p => extractedPOS.add(p.replace(/[()]/g, '').trim()));
+          // Remove POS from meaning string and clean up extra commas
+          row[key] = row[key].replace(posRegex, '').replace(/,\s*,/g, ',').replace(/^,\s*|,\s*$/g, '').trim();
+        }
+      }
+    }
+  }
+
+  // 2. Standardize common keys for better column names
+  if (row['en'] !== undefined) { row['Word (English)'] = row['en']; delete row['en']; }
+  if (row['bn'] !== undefined) { row['Meaning (Bengali)'] = row['bn']; delete row['bn']; }
+  if (row['idiom'] !== undefined) { row['Idiom'] = row['idiom']; delete row['idiom']; }
+  
+  // Add Parts of Speech column if found
+  if (extractedPOS.size > 0) {
+    row['Parts of Speech'] = Array.from(extractedPOS).join(', ');
+  }
+
+  return row;
 }
 
 /* ---------- Progress ---------- */
@@ -217,7 +238,6 @@ function renderTable() {
   
   if (table) table.destroy();
 
-  // Generate dynamic columns
   const columns = currentColumns.map(col => {
     let colDef = {
       title: col,
@@ -226,16 +246,15 @@ function renderTable() {
       widthGrow: 1,
       formatter: function(cell) {
         let val = cell.getValue();
-        if (val === undefined || val === null) return "";
-        return val;
+        return (val === undefined || val === null) ? "" : val;
       }
     };
 
-    // Make specific columns wider for better readability
-    const wideCols = ["Meaning", "En_meaning", "Bn", "Definition", "Idiom", "Examples"];
+    // Make meaning/idiom columns wider
+    const wideCols = ["Meaning", "En_meaning", "Bengali", "Definition", "Idiom", "Examples", "Parts of Speech"];
     if (wideCols.some(w => col.toLowerCase().includes(w.toLowerCase()))) {
       colDef.widthGrow = 3;
-      colDef.minWidth = 250;
+      colDef.minWidth = 200;
     }
     return colDef;
   });
@@ -251,7 +270,6 @@ function renderTable() {
     placeholder: "No Data Available",
     resizableRows: true, 
     rowFormatter: function(row) {
-      // Automatic text wrapping for long texts (Bengali/Japanese/Chinese)
       row.getElement().style.whiteSpace = "pre-wrap";
       row.getElement().style.wordWrap = "break-word";
     }
@@ -261,11 +279,11 @@ function renderTable() {
   colCountEl.textContent = currentColumns.length;
 }
 
-/* ---------- Download CSV via Tabulator ---------- */
+/* ---------- Download CSV ---------- */
 downloadBtn.addEventListener('click', () => {
   if (!table) return;
   table.download("csv", "converted_data_" + Date.now() + ".csv", {
-    bom: true, // Essential for Excel to properly read Bengali, Japanese, Chinese characters
+    bom: true, 
   });
 });
 
