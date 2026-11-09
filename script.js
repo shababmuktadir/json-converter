@@ -10,7 +10,7 @@ const colCountEl = document.getElementById('colCount');
 const downloadBtn = document.getElementById('downloadBtn');
 const resetBtn = document.getElementById('resetBtn');
 
-let table = null; // Tabulator instance
+let table = null; 
 let currentData = [];
 let currentColumns = [];
 
@@ -95,7 +95,7 @@ async function handleFile(file) {
       rawParsedData = JSON.parse(text);
     }
 
-    // ✨ SMART PARSING LOGIC ✨
+    // ✨ SMART PARSING LOGIC (ANY TYPE OF JSON) ✨
     processSmartData(rawParsedData);
     
     if (!currentData.length) {
@@ -113,79 +113,90 @@ async function handleFile(file) {
   }
 }
 
-/* ---------- Smart Parser (JSON to Standardized Format) ---------- */
+/* ---------- Universal Smart Parser ---------- */
 function processSmartData(data) {
-  let normalizedRows = [];
-  let columns = new Set();
+  let rawRecords = [];
 
-  // Case 1: Array of Objects [{en: "false", bn: "ভুল (Adj.)"}, ...]
+  // 1. Identify the main array of records
   if (Array.isArray(data)) {
-    data.forEach(item => {
-      if (typeof item !== 'object' || item === null) return;
-      
-      let row = { "Word (English)": "", "Meaning (Bengali)": "", "Parts of Speech": "", "Other Info": "" };
-      
-      // Try to find English Word
-      row["Word (English)"] = item.en || item.word || item.english || item.term || "";
-      
-      // Try to find Bengali Meaning
-      let meaningText = item.bn || item.meaning || item.translation || item.definition || "";
-      
-      if (typeof meaningText === 'string') {
-        // Extract Parts of Speech inside parentheses like (Adj.), (Adv.), (Noun)
-        const posRegex = /\((Adj|Adv|Noun|Verb|Pron|Prep|Conj|Interj)\.?\)/gi;
-        const posMatches = meaningText.match(posRegex);
-        
-        if (posMatches) {
-          row["Parts of Speech"] = [...new Set(posMatches.map(p => p.replace(/[()]/g, '')))].join(', ');
-          meaningText = meaningText.replace(posRegex, '').trim();
+    // Case: [{...}, {...}]
+    rawRecords = data;
+  } else if (typeof data === 'object' && data !== null) {
+    const values = Object.values(data);
+    
+    // Check if it's a Dictionary-like object (e.g., {"word1": ["meaning1"], "word2": ["meaning2"]})
+    const isDictionary = values.length > 0 && (typeof values[0] !== 'object' || Array.isArray(values[0]));
+
+    if (isDictionary) {
+      rawRecords = Object.entries(data).map(([key, value]) => ({
+        Word_Key: key,
+        Meaning_Value: Array.isArray(value) ? value.join(', ') : value
+      }));
+    } else {
+      // Check for common array property names (e.g., {data: [...]}, {items: [...]})
+      let foundArray = null;
+      for (const key of Object.keys(data)) {
+        if (Array.isArray(data[key]) && data[key].length > 0 && typeof data[key][0] === 'object') {
+          foundArray = data[key];
+          break;
         }
-
-        // Clean up extra commas/spaces
-        meaningText = meaningText.replace(/,\s*,/g, ',').replace(/^,\s*|,\s*$/g, '');
-        row["Meaning (Bengali)"] = meaningText;
-      } else if (Array.isArray(meaningText)) {
-        row["Meaning (Bengali)"] = meaningText.join(', ');
       }
-
-      // Capture Synonyms/Antonyms if they exist in the JSON explicitly
-      if (item.synonyms) row["Synonyms"] = Array.isArray(item.synonyms) ? item.synonyms.join(', ') : item.synonyms;
-      if (item.antonyms) row["Antonyms"] = Array.isArray(item.antonyms) ? item.antonyms.join(', ') : item.antonyms;
-
-      normalizedRows.push(row);
-    });
-  } 
-  // Case 2: Object with Arrays {"a": ["এক", "ইংরেজী..."], "abandon": ["ত্যাগ করা"]}
-  else if (typeof data === 'object' && data !== null) {
-    for (const [key, value] of Object.entries(data)) {
-      let row = { "Word (English)": key, "Meaning (Bengali)": "", "Parts of Speech": "", "Other Info": "" };
-      
-      if (Array.isArray(value)) {
-        row["Meaning (Bengali)"] = value.join(', ');
-      } else if (typeof value === 'object' && value !== null) {
-        // If value is an object (e.g., {meaning: "...", pos: "..."})
-        row["Meaning (Bengali)"] = value.bn || value.meaning || JSON.stringify(value);
-        if (value.pos) row["Parts of Speech"] = value.pos;
+      if (foundArray) {
+        rawRecords = foundArray;
       } else {
-        row["Meaning (Bengali)"] = String(value);
+        // It's just a single object
+        rawRecords = [data];
       }
-      normalizedRows.push(row);
     }
   }
 
-  // Dynamically collect all keys generated
-  normalizedRows.forEach(r => Object.keys(r).forEach(k => columns.add(k)));
+  // 2. Flatten each record and extract columns
+  let normalizedRows = [];
+  let columns = new Set();
+
+  rawRecords.forEach(item => {
+    if (typeof item !== 'object' || item === null) {
+      // If item is a primitive in an array (e.g., ["a", "b", "c"])
+      let row = { "Value": item };
+      normalizedRows.push(row);
+      columns.add("Value");
+    } else {
+      let flatItem = flattenObject(item);
+      normalizedRows.push(flatItem);
+      Object.keys(flatItem).forEach(k => columns.add(k));
+    }
+  });
 
   currentData = normalizedRows;
-  // Prioritize specific columns first
-  const priorityCols = ["Word (English)", "Meaning (Bengali)", "Parts of Speech", "Synonyms", "Antonyms"];
-  currentColumns = Array.from(columns).sort((a, b) => {
-    let idxA = priorityCols.indexOf(a);
-    let idxB = priorityCols.indexOf(b);
-    if (idxA === -1) idxA = 99;
-    if (idxB === -1) idxB = 99;
-    return idxA - idxB;
-  });
+  currentColumns = Array.from(columns);
+}
+
+/* ---------- Universal Recursive Flatten ---------- */
+function flattenObject(obj, prefix = '') {
+  let result = {};
+  
+  for (const [key, value] of Object.entries(obj)) {
+    // Capitalize first letter of key for better CSV headers
+    const newKey = prefix ? `${prefix}.${key}` : key.charAt(0).toUpperCase() + key.slice(1);
+
+    if (value === null || value === undefined) {
+      result[newKey] = "";
+    } else if (Array.isArray(value)) {
+      // Array handling: If array of strings/numbers, join them. If array of objects, stringify.
+      const isPrimitive = value.every(v => v === null || typeof v !== 'object');
+      if (isPrimitive) {
+        result[newKey] = value.join(', ');
+      } else {
+        result[newKey] = JSON.stringify(value);
+      }
+    } else if (typeof value === 'object') {
+      // Nested object handling (recursive)
+      Object.assign(result, flattenObject(value, newKey));
+    } else {
+      result[newKey] = value;
+    }
+  }
+  return result;
 }
 
 /* ---------- Progress ---------- */
@@ -220,8 +231,9 @@ function renderTable() {
       }
     };
 
-    // Make the meaning column wider
-    if (col.includes("Meaning") || col.includes("Synonyms") || col.includes("Antonyms")) {
+    // Make specific columns wider for better readability
+    const wideCols = ["Meaning", "En_meaning", "Bn", "Definition", "Idiom", "Examples"];
+    if (wideCols.some(w => col.toLowerCase().includes(w.toLowerCase()))) {
       colDef.widthGrow = 3;
       colDef.minWidth = 250;
     }
@@ -237,9 +249,9 @@ function renderTable() {
     paginationSize: 50,
     paginationSizeSelector: [25, 50, 100, 500, true],
     placeholder: "No Data Available",
-    resizableRows: true, // Allows user to drag row height
+    resizableRows: true, 
     rowFormatter: function(row) {
-      // Add automatic text wrapping for long texts
+      // Automatic text wrapping for long texts (Bengali/Japanese/Chinese)
       row.getElement().style.whiteSpace = "pre-wrap";
       row.getElement().style.wordWrap = "break-word";
     }
@@ -252,8 +264,8 @@ function renderTable() {
 /* ---------- Download CSV via Tabulator ---------- */
 downloadBtn.addEventListener('click', () => {
   if (!table) return;
-  table.download("csv", "dictionary_data_" + Date.now() + ".csv", {
-    bom: true, 
+  table.download("csv", "converted_data_" + Date.now() + ".csv", {
+    bom: true, // Essential for Excel to properly read Bengali, Japanese, Chinese characters
   });
 });
 
