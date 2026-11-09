@@ -1,100 +1,55 @@
-* { box-sizing: border-box; margin: 0; padding: 0; }
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JSON / JSONL → CSV Converter</title>
+  <!-- Tabulator CSS -->
+  <link href="https://unpkg.com/tabulator-tables@5.5.2/dist/css/tabulator.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>JSON / JSONL → CSV</h1>
+      <p>Upload any size JSON or JSONL file, preview as table, export to CSV.</p>
+    </header>
 
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  background: #f5f7fb;
-  color: #1f2937;
-  min-height: 100vh;
-  padding: 24px;
-}
+    <!-- Upload zone -->
+    <div id="dropZone" class="drop-zone">
+      <input type="file" id="fileInput" accept=".json,.jsonl,.ndjson" hidden />
+      <div class="drop-content">
+        <div class="icon">📂</div>
+        <p><strong>Click to upload</strong> or drag & drop</p>
+        <small>.json, .jsonl, .ndjson</small>
+      </div>
+    </div>
 
-.container { max-width: 1400px; margin: 0 auto; }
+    <!-- Status -->
+    <div id="status" class="status hidden">
+      <div class="progress-bar"><div id="progressFill"></div></div>
+      <span id="statusText"></span>
+    </div>
 
-header { text-align: center; margin-bottom: 24px; }
-header h1 { font-size: 2rem; color: #111827; }
-header p { color: #6b7280; margin-top: 6px; }
+    <!-- Controls -->
+    <div id="controls" class="controls hidden">
+      <div class="info">
+        <span id="rowCount">0</span> rows • <span id="colCount">0</span> columns
+      </div>
+      <div class="actions">
+        <button id="downloadBtn" class="btn primary">⬇ Download CSV</button>
+        <button id="resetBtn" class="btn">✕ Reset</button>
+      </div>
+    </div>
 
-/* Drop zone */
-.drop-zone {
-  border: 3px dashed #cbd5e1;
-  border-radius: 16px;
-  background: #fff;
-  padding: 48px 24px;
-  text-align: center;
-  cursor: pointer;
-  transition: all .2s;
-  margin-bottom: 20px;
-}
-.drop-zone:hover, .drop-zone.dragover {
-  border-color: #3b82f6;
-  background: #eff6ff;
-}
-.drop-content .icon { font-size: 3rem; margin-bottom: 12px; }
-.drop-content p { color: #374151; }
-.drop-content small { color: #9ca3af; }
+    <!-- Tabulator Table -->
+    <div id="tableWrapper" class="table-wrapper hidden">
+      <div id="data-table"></div>
+    </div>
+  </div>
 
-/* Status */
-.status { margin-top: 20px; margin-bottom: 20px; }
-.progress-bar {
-  height: 8px;
-  background: #e5e7eb;
-  border-radius: 4px;
-  overflow: hidden;
-  margin-bottom: 8px;
-}
-#progressFill {
-  height: 100%;
-  width: 0%;
-  background: linear-gradient(90deg, #3b82f6, #8b5cf6);
-  transition: width .2s;
-}
-#statusText { font-size: .9rem; color: #6b7280; }
-
-/* Controls */
-.controls {
-  margin: 20px 0;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-.info { font-weight: 600; color: #374151; }
-.actions { display: flex; gap: 8px; }
-
-.btn {
-  padding: 10px 16px;
-  border-radius: 10px;
-  border: 1px solid #d1d5db;
-  background: #fff;
-  font-size: .95rem;
-  cursor: pointer;
-  transition: all .15s;
-}
-.btn:hover { background: #f3f4f6; }
-.btn.primary {
-  background: #3b82f6;
-  color: #fff;
-  border-color: #3b82f6;
-}
-.btn.primary:hover { background: #2563eb; }
-
-/* Tabulator Customization */
-.table-wrapper {
-  background: #fff;
-  border-radius: 12px;
-  overflow: hidden;
-  box-shadow: 0 4px 16px rgba(0,0,0,.06);
-}
-
-/* Fix for Bengali / Multi-line text */
-.tabulator-cell {
-  white-space: pre-wrap !important; 
-  word-wrap: break-word !important; 
-  overflow-wrap: break-word !important;
-  line-height: 1.5 !important;
-  padding: 10px !important;
-  font-size: 14px;
-}
-
-.hidden { display: none !important; }
+  <!-- Tabulator JS -->
+  <script src="https://unpkg.com/tabulator-tables@5.5.2/dist/js/tabulator.min.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
