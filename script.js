@@ -54,10 +54,10 @@ async function handleFile(file) {
     const totalSize = file.size;
     const totalSizeMB = (totalSize / 1024 / 1024).toFixed(2);
 
+    let rawParsedData = [];
+
     if (isJsonl) {
       let rows = [];
-      let columns = new Set();
-
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -71,26 +71,16 @@ async function handleFile(file) {
           const trimmed = line.trim();
           if (!trimmed) continue;
           try {
-            const obj = JSON.parse(trimmed);
-            const flat = flatten(obj);
-            Object.keys(flat).forEach(k => columns.add(k));
-            rows.push(flat);
+            rows.push(JSON.parse(trimmed));
           } catch (e) { /* ignore invalid line */ }
         }
         updateProgress(bytesRead, totalSize, totalSizeMB);
         await new Promise(r => setTimeout(r));
       }
-      
       if (buffer.trim()) {
-        try {
-          const obj = JSON.parse(buffer.trim());
-          const flat = flatten(obj);
-          Object.keys(flat).forEach(k => columns.add(k));
-          rows.push(flat);
-        } catch (e) { /* ignore */ }
+        try { rows.push(JSON.parse(buffer.trim())); } catch (e) {}
       }
-      currentData = rows;
-      currentColumns = Array.from(columns);
+      rawParsedData = rows;
     } else {
       const chunks = [];
       while (true) {
@@ -102,24 +92,12 @@ async function handleFile(file) {
         await new Promise(r => setTimeout(r));
       }
       const text = new TextDecoder('utf-8').decode(await new Blob(chunks).arrayBuffer());
-      let parsed = JSON.parse(text);
-      let arr = Array.isArray(parsed) ? parsed : [parsed];
-      
-      // If it's an object with one array inside (like Wiktionary dumps)
-      if (!Array.isArray(parsed) && typeof parsed === 'object') {
-        for (const k of Object.keys(parsed)) {
-          if (Array.isArray(parsed[k])) { arr = parsed[k]; break; }
-        }
-      }
-
-      const rows = arr.map(item => (typeof item === 'object' && item !== null) ? flatten(item) : { value: item });
-      const columns = new Set();
-      rows.forEach(r => Object.keys(r).forEach(k => columns.add(k)));
-
-      currentData = rows;
-      currentColumns = Array.from(columns);
+      rawParsedData = JSON.parse(text);
     }
 
+    // ✨ SMART PARSING LOGIC ✨
+    processSmartData(rawParsedData);
+    
     if (!currentData.length) {
       showStatus('❌ No valid records found.', 100);
       return;
@@ -135,6 +113,81 @@ async function handleFile(file) {
   }
 }
 
+/* ---------- Smart Parser (JSON to Standardized Format) ---------- */
+function processSmartData(data) {
+  let normalizedRows = [];
+  let columns = new Set();
+
+  // Case 1: Array of Objects [{en: "false", bn: "ভুল (Adj.)"}, ...]
+  if (Array.isArray(data)) {
+    data.forEach(item => {
+      if (typeof item !== 'object' || item === null) return;
+      
+      let row = { "Word (English)": "", "Meaning (Bengali)": "", "Parts of Speech": "", "Other Info": "" };
+      
+      // Try to find English Word
+      row["Word (English)"] = item.en || item.word || item.english || item.term || "";
+      
+      // Try to find Bengali Meaning
+      let meaningText = item.bn || item.meaning || item.translation || item.definition || "";
+      
+      if (typeof meaningText === 'string') {
+        // Extract Parts of Speech inside parentheses like (Adj.), (Adv.), (Noun)
+        const posRegex = /\((Adj|Adv|Noun|Verb|Pron|Prep|Conj|Interj)\.?\)/gi;
+        const posMatches = meaningText.match(posRegex);
+        
+        if (posMatches) {
+          row["Parts of Speech"] = [...new Set(posMatches.map(p => p.replace(/[()]/g, '')))].join(', ');
+          meaningText = meaningText.replace(posRegex, '').trim();
+        }
+
+        // Clean up extra commas/spaces
+        meaningText = meaningText.replace(/,\s*,/g, ',').replace(/^,\s*|,\s*$/g, '');
+        row["Meaning (Bengali)"] = meaningText;
+      } else if (Array.isArray(meaningText)) {
+        row["Meaning (Bengali)"] = meaningText.join(', ');
+      }
+
+      // Capture Synonyms/Antonyms if they exist in the JSON explicitly
+      if (item.synonyms) row["Synonyms"] = Array.isArray(item.synonyms) ? item.synonyms.join(', ') : item.synonyms;
+      if (item.antonyms) row["Antonyms"] = Array.isArray(item.antonyms) ? item.antonyms.join(', ') : item.antonyms;
+
+      normalizedRows.push(row);
+    });
+  } 
+  // Case 2: Object with Arrays {"a": ["এক", "ইংরেজী..."], "abandon": ["ত্যাগ করা"]}
+  else if (typeof data === 'object' && data !== null) {
+    for (const [key, value] of Object.entries(data)) {
+      let row = { "Word (English)": key, "Meaning (Bengali)": "", "Parts of Speech": "", "Other Info": "" };
+      
+      if (Array.isArray(value)) {
+        row["Meaning (Bengali)"] = value.join(', ');
+      } else if (typeof value === 'object' && value !== null) {
+        // If value is an object (e.g., {meaning: "...", pos: "..."})
+        row["Meaning (Bengali)"] = value.bn || value.meaning || JSON.stringify(value);
+        if (value.pos) row["Parts of Speech"] = value.pos;
+      } else {
+        row["Meaning (Bengali)"] = String(value);
+      }
+      normalizedRows.push(row);
+    }
+  }
+
+  // Dynamically collect all keys generated
+  normalizedRows.forEach(r => Object.keys(r).forEach(k => columns.add(k)));
+
+  currentData = normalizedRows;
+  // Prioritize specific columns first
+  const priorityCols = ["Word (English)", "Meaning (Bengali)", "Parts of Speech", "Synonyms", "Antonyms"];
+  currentColumns = Array.from(columns).sort((a, b) => {
+    let idxA = priorityCols.indexOf(a);
+    let idxB = priorityCols.indexOf(b);
+    if (idxA === -1) idxA = 99;
+    if (idxB === -1) idxB = 99;
+    return idxA - idxB;
+  });
+}
+
 /* ---------- Progress ---------- */
 function updateProgress(read, total, totalMB) {
   const pct = Math.min(100, Math.round((read / total) * 100));
@@ -147,70 +200,49 @@ function showStatus(text, pct) {
 }
 function hideStatus() { statusEl.classList.add('hidden'); }
 
-/* ---------- Flatten Logic ---------- */
-// Arrays are kept as pretty JSON strings so they look good in the table, 
-// but nested objects are flattened (e.g., etymology.source_language)
-function flatten(obj, prefix = '', out = {}) {
-  if (obj === null || typeof obj !== 'object') {
-    out[prefix] = obj;
-    return out;
-  }
-  
-  if (Array.isArray(obj)) {
-    // If it's an array of primitives, join them. If objects, stringify them.
-    const isPrimitive = obj.every(v => v === null || typeof v !== 'object');
-    if (isPrimitive) {
-      out[prefix] = obj.join(', ');
-    } else {
-      // Stringify arrays of objects with indentation for readability
-      out[prefix] = JSON.stringify(obj, null, 1); 
-    }
-    return out;
-  }
-  
-  for (const key of Object.keys(obj)) {
-    const newKey = prefix ? `${prefix}.${key}` : key;
-    const val = obj[key];
-    if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
-      flatten(val, newKey, out);
-    } else {
-      out[newKey] = val;
-    }
-  }
-  return out;
-}
-
 /* ---------- Render Tabulator Table ---------- */
 function renderTable() {
   tableWrapper.classList.remove('hidden');
   
-  // If table already exists, destroy it before creating a new one
-  if (table) {
-    table.destroy();
-  }
+  if (table) table.destroy();
 
-  // Generate dynamic columns based on JSON keys
-  const columns = currentColumns.map(col => ({
-    title: col,
-    field: col,
-    minWidth: 150, // Prevents columns from becoming too narrow
-    widthGrow: 1,
-    formatter: function(cell) {
-      let val = cell.getValue();
-      if (val === undefined || val === null) return "";
-      return val;
+  // Generate dynamic columns
+  const columns = currentColumns.map(col => {
+    let colDef = {
+      title: col,
+      field: col,
+      minWidth: 120,
+      widthGrow: 1,
+      formatter: function(cell) {
+        let val = cell.getValue();
+        if (val === undefined || val === null) return "";
+        return val;
+      }
+    };
+
+    // Make the meaning column wider
+    if (col.includes("Meaning") || col.includes("Synonyms") || col.includes("Antonyms")) {
+      colDef.widthGrow = 3;
+      colDef.minWidth = 250;
     }
-  }));
+    return colDef;
+  });
 
   table = new Tabulator("#data-table", {
     data: currentData,
     columns: columns,
-    layout: "fitDataFill", // Adjusts column widths automatically
-    height: "70vh",        // Fixed height with internal scrolling
-    pagination: "local",   // Built-in pagination for massive data
-    paginationSize: 50,    // Show 50 rows per page
-    paginationSizeSelector: [25, 50, 100, 500, true], // Allow changing page size
+    layout: "fitDataFill",
+    height: "70vh",
+    pagination: "local",
+    paginationSize: 50,
+    paginationSizeSelector: [25, 50, 100, 500, true],
     placeholder: "No Data Available",
+    resizableRows: true, // Allows user to drag row height
+    rowFormatter: function(row) {
+      // Add automatic text wrapping for long texts
+      row.getElement().style.whiteSpace = "pre-wrap";
+      row.getElement().style.wordWrap = "break-word";
+    }
   });
 
   rowCountEl.textContent = currentData.length.toLocaleString();
@@ -220,9 +252,8 @@ function renderTable() {
 /* ---------- Download CSV via Tabulator ---------- */
 downloadBtn.addEventListener('click', () => {
   if (!table) return;
-  // Tabulator has a built-in CSV exporter that handles commas, quotes, and newlines perfectly!
-  table.download("csv", "converted_" + Date.now() + ".csv", {
-    bom: true, // Add BOM for Excel UTF-8 support (Bengali)
+  table.download("csv", "dictionary_data_" + Date.now() + ".csv", {
+    bom: true, 
   });
 });
 
