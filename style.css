@@ -88,13 +88,15 @@ header p { color: #6b7280; margin-top: 6px; }
 }
 
 /* Fix for Bengali / Multi-line text */
+/* Fix for Bengali / Multi-line text */
 .tabulator-cell {
   white-space: pre-wrap !important; 
   word-wrap: break-word !important; 
   overflow-wrap: break-word !important;
-  line-height: 1.5 !important;
-  padding: 10px !important;
+  line-height: 1.6 !important;
+  padding: 12px !important;
   font-size: 14px;
+  font-family: 'SolaimanLipi', 'Kalpurush', -apple-system, sans-serif; /* বাংলা ফন্টের জন্য */
 }
 
 .hidden { display: none !important; }
