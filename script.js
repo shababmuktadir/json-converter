@@ -5,16 +5,14 @@ const statusText = document.getElementById('statusText');
 const progressFill = document.getElementById('progressFill');
 const controls = document.getElementById('controls');
 const tableWrapper = document.getElementById('tableWrapper');
-const table = document.getElementById('previewTable');
 const rowCountEl = document.getElementById('rowCount');
 const colCountEl = document.getElementById('colCount');
-const previewNote = document.getElementById('previewNote');
 const downloadBtn = document.getElementById('downloadBtn');
 const resetBtn = document.getElementById('resetBtn');
-const delimiterSel = document.getElementById('delimiter');
 
-let currentData = [];     // parsed array of objects
-let currentColumns = [];  // union of all keys
+let table = null; // Tabulator instance
+let currentData = [];
+let currentColumns = [];
 
 /* ---------- Upload handling ---------- */
 dropZone.addEventListener('click', () => fileInput.click());
@@ -47,7 +45,6 @@ async function handleFile(file) {
   const isJsonl = /\.(jsonl|ndjson)$/i.test(file.name);
 
   try {
-    // Stream read to support huge files
     const stream = file.stream();
     const reader = stream.getReader();
     const decoder = new TextDecoder('utf-8');
@@ -58,7 +55,6 @@ async function handleFile(file) {
     const totalSizeMB = (totalSize / 1024 / 1024).toFixed(2);
 
     if (isJsonl) {
-      // ---- JSONL: parse line-by-line (stream friendly) ----
       let rows = [];
       let columns = new Set();
 
@@ -69,7 +65,7 @@ async function handleFile(file) {
         buffer += decoder.decode(value, { stream: true });
 
         const lines = buffer.split('\n');
-        buffer = lines.pop(); // keep last partial line
+        buffer = lines.pop();
 
         for (const line of lines) {
           const trimmed = line.trim();
@@ -79,17 +75,12 @@ async function handleFile(file) {
             const flat = flatten(obj);
             Object.keys(flat).forEach(k => columns.add(k));
             rows.push(flat);
-          } catch (e) {
-            console.warn('Skipping invalid line:', trimmed.slice(0, 80));
-          }
+          } catch (e) { /* ignore invalid line */ }
         }
-
         updateProgress(bytesRead, totalSize, totalSizeMB);
-        // yield to UI
         await new Promise(r => setTimeout(r));
       }
-
-      // leftover
+      
       if (buffer.trim()) {
         try {
           const obj = JSON.parse(buffer.trim());
@@ -98,11 +89,9 @@ async function handleFile(file) {
           rows.push(flat);
         } catch (e) { /* ignore */ }
       }
-
       currentData = rows;
       currentColumns = Array.from(columns);
     } else {
-      // ---- Standard JSON: read whole file ----
       const chunks = [];
       while (true) {
         const { value, done } = await reader.read();
@@ -114,23 +103,16 @@ async function handleFile(file) {
       }
       const text = new TextDecoder('utf-8').decode(await new Blob(chunks).arrayBuffer());
       let parsed = JSON.parse(text);
-
-      // find array
-      let arr = null;
-      if (Array.isArray(parsed)) arr = parsed;
-      else if (typeof parsed === 'object') {
-        // find first array property
+      let arr = Array.isArray(parsed) ? parsed : [parsed];
+      
+      // If it's an object with one array inside (like Wiktionary dumps)
+      if (!Array.isArray(parsed) && typeof parsed === 'object') {
         for (const k of Object.keys(parsed)) {
           if (Array.isArray(parsed[k])) { arr = parsed[k]; break; }
         }
-        if (!arr) arr = [parsed]; // single object
       }
 
-      // flatten each item
-      const rows = arr.map(item =>
-        (typeof item === 'object' && item !== null) ? flatten(item) : { value: item }
-      );
-
+      const rows = arr.map(item => (typeof item === 'object' && item !== null) ? flatten(item) : { value: item });
       const columns = new Set();
       rows.forEach(r => Object.keys(r).forEach(k => columns.add(k)));
 
@@ -139,15 +121,14 @@ async function handleFile(file) {
     }
 
     if (!currentData.length) {
-      showStatus('❌ No valid records found in file.', 100);
+      showStatus('❌ No valid records found.', 100);
       return;
     }
 
     hideStatus();
     renderTable();
     showControls();
-    previewNote.textContent =
-      `Showing first 100 rows (out of ${currentData.length.toLocaleString()}). Full data will be exported.`;
+    
   } catch (err) {
     console.error(err);
     showStatus('❌ Parse error: ' + err.message, 100);
@@ -166,17 +147,27 @@ function showStatus(text, pct) {
 }
 function hideStatus() { statusEl.classList.add('hidden'); }
 
-/* ---------- Flatten nested objects ---------- */
+/* ---------- Flatten Logic ---------- */
+// Arrays are kept as pretty JSON strings so they look good in the table, 
+// but nested objects are flattened (e.g., etymology.source_language)
 function flatten(obj, prefix = '', out = {}) {
   if (obj === null || typeof obj !== 'object') {
     out[prefix] = obj;
     return out;
   }
+  
   if (Array.isArray(obj)) {
-    // arrays become JSON strings (safer for CSV)
-    out[prefix] = JSON.stringify(obj);
+    // If it's an array of primitives, join them. If objects, stringify them.
+    const isPrimitive = obj.every(v => v === null || typeof v !== 'object');
+    if (isPrimitive) {
+      out[prefix] = obj.join(', ');
+    } else {
+      // Stringify arrays of objects with indentation for readability
+      out[prefix] = JSON.stringify(obj, null, 1); 
+    }
     return out;
   }
+  
   for (const key of Object.keys(obj)) {
     const newKey = prefix ? `${prefix}.${key}` : key;
     const val = obj[key];
@@ -189,92 +180,65 @@ function flatten(obj, prefix = '', out = {}) {
   return out;
 }
 
-/* ---------- Render preview table ---------- */
+/* ---------- Render Tabulator Table ---------- */
 function renderTable() {
-  const thead = table.querySelector('thead tr');
-  const tbody = table.querySelector('tbody');
-  thead.innerHTML = '';
-  tbody.innerHTML = '';
+  tableWrapper.classList.remove('hidden');
+  
+  // If table already exists, destroy it before creating a new one
+  if (table) {
+    table.destroy();
+  }
 
-  // header
-  currentColumns.forEach(col => {
-    const th = document.createElement('th');
-    th.textContent = col;
-    thead.appendChild(th);
+  // Generate dynamic columns based on JSON keys
+  const columns = currentColumns.map(col => ({
+    title: col,
+    field: col,
+    minWidth: 150, // Prevents columns from becoming too narrow
+    widthGrow: 1,
+    formatter: function(cell) {
+      let val = cell.getValue();
+      if (val === undefined || val === null) return "";
+      return val;
+    }
+  }));
+
+  table = new Tabulator("#data-table", {
+    data: currentData,
+    columns: columns,
+    layout: "fitDataFill", // Adjusts column widths automatically
+    height: "70vh",        // Fixed height with internal scrolling
+    pagination: "local",   // Built-in pagination for massive data
+    paginationSize: 50,    // Show 50 rows per page
+    paginationSizeSelector: [25, 50, 100, 500, true], // Allow changing page size
+    placeholder: "No Data Available",
   });
-
-  // first 100 rows only for preview performance
-  const previewLimit = 100;
-  const previewRows = currentData.slice(0, previewLimit);
-
-  const frag = document.createDocumentFragment();
-  previewRows.forEach(row => {
-    const tr = document.createElement('tr');
-    currentColumns.forEach(col => {
-      const td = document.createElement('td');
-      const v = row[col];
-      td.textContent = v === undefined || v === null
-        ? ''
-        : (typeof v === 'object' ? JSON.stringify(v) : String(v));
-      tr.appendChild(td);
-    });
-    frag.appendChild(tr);
-  });
-  tbody.appendChild(frag);
 
   rowCountEl.textContent = currentData.length.toLocaleString();
   colCountEl.textContent = currentColumns.length;
-
-  tableWrapper.classList.remove('hidden');
 }
 
-/* ---------- CSV export ---------- */
+/* ---------- Download CSV via Tabulator ---------- */
 downloadBtn.addEventListener('click', () => {
-  if (!currentData.length) return;
-
-  const delim = delimiterSel.value === '\\t' ? '\t' : delimiterSel.value;
-  const header = currentColumns.map(c => escapeCSV(c, delim)).join(delim);
-
-  const lines = [header];
-  for (const row of currentData) {
-    const line = currentColumns.map(c => {
-      const v = row[c];
-      if (v === undefined || v === null) return '';
-      if (typeof v === 'object') return escapeCSV(JSON.stringify(v), delim);
-      return escapeCSV(String(v), delim);
-    }).join(delim);
-    lines.push(line);
-  }
-
-  const csv = '\uFEFF' + lines.join('\n'); // BOM for Excel UTF-8
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'converted_' + Date.now() + '.csv';
-  a.click();
-  URL.revokeObjectURL(url);
+  if (!table) return;
+  // Tabulator has a built-in CSV exporter that handles commas, quotes, and newlines perfectly!
+  table.download("csv", "converted_" + Date.now() + ".csv", {
+    bom: true, // Add BOM for Excel UTF-8 support (Bengali)
+  });
 });
 
-function escapeCSV(str, delim) {
-  if (str === '') return '';
-  const needsQuote =
-    str.includes(delim) || str.includes('"') ||
-    str.includes('\n') || str.includes('\r');
-  const escaped = str.replace(/"/g, '""');
-  return needsQuote ? `"${escaped}"` : escaped;
-}
-
-/* ---------- UI helpers ---------- */
+/* ---------- UI Helpers ---------- */
 function showControls() { controls.classList.remove('hidden'); }
 function resetState() {
   currentData = [];
   currentColumns = [];
   controls.classList.add('hidden');
   tableWrapper.classList.add('hidden');
-  previewNote.textContent = '';
   hideStatus();
   fileInput.value = '';
+  if (table) {
+    table.destroy();
+    table = null;
+  }
 }
 
 resetBtn.addEventListener('click', resetState);
