@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JSON / JSONL → CSV Converter</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>JSON / JSONL → CSV</h1>
+      <p>Upload any size JSON or JSONL file, preview as table, export to CSV.</p>
+    </header>
+
+    <!-- Upload zone -->
+    <div id="dropZone" class="drop-zone">
+      <input type="file" id="fileInput" accept=".json,.jsonl,.ndjson" hidden />
+      <div class="drop-content">
+        <div class="icon">📂</div>
+        <p><strong>Click to upload</strong> or drag & drop</p>
+        <small>.json, .jsonl, .ndjson</small>
+      </div>
+    </div>
+
+    <!-- Status / progress -->
+    <div id="status" class="status hidden">
+      <div class="progress-bar"><div id="progressFill"></div></div>
+      <span id="statusText"></span>
+    </div>
+
+    <!-- Controls -->
+    <div id="controls" class="controls hidden">
+      <div class="info">
+        <span id="rowCount">0</span> rows • <span id="colCount">0</span> columns
+      </div>
+      <div class="actions">
+        <select id="delimiter">
+          <option value=",">Comma (,)</option>
+          <option value=";">Semicolon (;)</option>
+          <option value="\t">Tab</option>
+        </select>
+        <button id="downloadBtn" class="btn primary">⬇ Download CSV</button>
+        <button id="resetBtn" class="btn">✕ Reset</button>
+      </div>
+    </div>
+
+    <!-- Table preview -->
+    <div id="tableWrapper" class="table-wrapper hidden">
+      <table id="previewTable">
+        <thead><tr></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div id="previewNote" class="preview-note"></div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
